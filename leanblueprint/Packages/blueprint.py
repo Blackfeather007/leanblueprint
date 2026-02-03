@@ -267,23 +267,53 @@ def serialize_graph(graph):
     Returns:
         dict: 包含节点列表、边列表和证明边列表的字典
     """
-    # 序列化所有节点
-    nodes = [serialize_node(node) for node in graph.nodes]
-    
-    # 序列化边（使用节点 ID）
-    edges = [(s.id, t.id) for s, t in graph.edges]
-    
-    # 序列化证明边（使用节点 ID）
-    proof_edges = [(s.id, t.id) for s, t in graph.proof_edges]
-    
-    return {
-        'nodes': nodes,
-        'edges': edges,
-        'proof_edges': proof_edges,
-        'node_count': len(nodes),
-        'edge_count': len(edges),
-        'proof_edge_count': len(proof_edges)
-    }
+    try:
+        # 序列化所有节点
+        nodes = []
+        for node in graph.nodes:
+            try:
+                nodes.append(serialize_node(node))
+            except Exception as e:
+                log.warning(f'Error serializing node {getattr(node, "id", "unknown")}: {e}')
+                continue
+        
+        # 序列化边（使用节点 ID，转换为列表）
+        edges = []
+        for s, t in graph.edges:
+            try:
+                edges.append([safe_serialize_value(s.id), safe_serialize_value(t.id)])
+            except Exception as e:
+                log.warning(f'Error serializing edge: {e}')
+                continue
+        
+        # 序列化证明边（使用节点 ID，转换为列表）
+        proof_edges = []
+        for s, t in graph.proof_edges:
+            try:
+                proof_edges.append([safe_serialize_value(s.id), safe_serialize_value(t.id)])
+            except Exception as e:
+                log.warning(f'Error serializing proof edge: {e}')
+                continue
+        
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'proof_edges': proof_edges,
+            'node_count': len(nodes),
+            'edge_count': len(edges),
+            'proof_edge_count': len(proof_edges)
+        }
+    except Exception as e:
+        log.error(f'Error serializing graph: {e}')
+        return {
+            'nodes': [],
+            'edges': [],
+            'proof_edges': [],
+            'node_count': 0,
+            'edge_count': 0,
+            'proof_edge_count': 0,
+            'error': str(e)
+        }
 
 
 def export_to_json(document, output_path: Path = None):
@@ -354,12 +384,38 @@ def export_to_json(document, output_path: Path = None):
         # 序列化每个图
         if 'graphs' in dep_graph_data:
             for sec_name, graph in dep_graph_data['graphs'].items():
-                data['dep_graph']['graphs'][sec_name] = serialize_graph(graph)
+                try:
+                    # 确保键名是字符串
+                    sec_name_str = safe_serialize_value(sec_name)
+                    if not isinstance(sec_name_str, str):
+                        sec_name_str = str(sec_name_str) if sec_name_str is not None else 'unknown'
+                    
+                    # 序列化图
+                    serialized_graph = serialize_graph(graph)
+                    data['dep_graph']['graphs'][sec_name_str] = serialized_graph
+                except Exception as e:
+                    log.warning(f'Error serializing graph for section {sec_name}: {e}')
+                    # 使用字符串化的键名，即使序列化失败也记录
+                    sec_name_str = str(sec_name) if sec_name is not None else 'unknown'
+                    data['dep_graph']['graphs'][sec_name_str] = {
+                        'error': f'Failed to serialize graph: {str(e)}',
+                        'nodes': [],
+                        'edges': [],
+                        'proof_edges': []
+                    }
     
     # 写入 JSON 文件
     try:
         # 确保输出目录存在
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 验证数据是否可序列化
+        try:
+            json.dumps(data, ensure_ascii=False)
+        except (TypeError, ValueError) as e:
+            log.error(f'Data structure is not JSON serializable: {e}')
+            # 尝试清理不可序列化的数据
+            data = clean_for_json(data)
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -368,11 +424,45 @@ def export_to_json(document, output_path: Path = None):
     except (TypeError, ValueError) as e:
         # JSON 序列化错误，记录详细信息
         log.error(f'JSON serialization error: {e}')
-        log.debug(f'Data structure: {data}')
+        log.debug(f'Data structure keys: {list(data.keys()) if isinstance(data, dict) else type(data)}')
         raise
     except Exception as e:
         log.warning(f'Error exporting blueprint data to JSON: {e}')
         raise
+
+
+def clean_for_json(obj):
+    """
+    清理对象，移除无法序列化的部分。
+    
+    Args:
+        obj: 要清理的对象
+        
+    Returns:
+        清理后的对象
+    """
+    if obj is None:
+        return None
+    elif isinstance(obj, (str, int, float, bool)):
+        return obj
+    elif isinstance(obj, (list, tuple)):
+        return [clean_for_json(item) for item in obj]
+    elif isinstance(obj, dict):
+        cleaned = {}
+        for k, v in obj.items():
+            try:
+                # 确保键是字符串
+                key = str(k) if not isinstance(k, str) else k
+                cleaned[key] = clean_for_json(v)
+            except Exception:
+                continue
+        return cleaned
+    else:
+        # 尝试转换为字符串
+        try:
+            return str(obj)
+        except:
+            return None
 
 
 def ProcessOptions(options, document):
