@@ -441,7 +441,10 @@ def ProcessOptions(options, document):
             return []
     
     # Register callback to generate subgraphs after main graphs are created
+    # Only if subgraph option is enabled (via environment variable)
     # Use a higher priority (lower number) than the main graph generation (110)
     # but after make_lean_data (150) to ensure all node data is ready
-    cb = PackagePreCleanupCB(data=make_subgraph_html)
-    document.addPackageResource(cb)
+    import os
+    if os.environ.get('LEANBLUEPRINT_SUBGRAPH') == '1':
+        cb = PackagePreCleanupCB(data=make_subgraph_html)
+        document.addPackageResource(cb)
