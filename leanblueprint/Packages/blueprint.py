@@ -11,6 +11,7 @@ Options:
 
 You can also add options that will be passed to the dependency graph package.
 """
+import json
 import string
 from pathlib import Path
 
@@ -171,6 +172,179 @@ SUBGRAPH_LINK_TPL = Template("""
   {% set subgraph_url = 'subgraph_' + node_id_safe + '.html' -%}
   <a class="subgraph_link" href="{{ subgraph_url }}">View Dependency Graph</a>
 """)
+
+
+def serialize_node(node):
+    """
+    序列化单个节点对象，提取所有相关信息。
+    
+    Args:
+        node: 依赖图中的节点对象
+        
+    Returns:
+        dict: 包含节点 ID、类型和所有 userdata 的字典
+    """
+    # 获取节点的基本信息
+    node_data = {
+        'id': node.id,
+        'kind': item_kind(node),
+    }
+    
+    # 获取节点的标题/标题（如果有）
+    if hasattr(node, 'caption') and node.caption:
+        node_data['caption'] = str(node.caption)
+    else:
+        # 如果没有 caption，使用 ID 的最后一部分作为标题
+        node_data['title'] = node.id.split(':')[-1]
+    
+    # 序列化所有 userdata
+    userdata = {}
+    for key in node.userdata.keys():
+        value = node.userdata.get(key)
+        # 跳过无法序列化的对象（如函数、其他节点对象等）
+        if isinstance(value, (str, int, float, bool, type(None))):
+            userdata[key] = value
+        elif isinstance(value, (list, tuple)):
+            # 处理列表/元组，递归处理其中的元素
+            serialized_list = []
+            for item in value:
+                if isinstance(item, (str, int, float, bool, type(None))):
+                    serialized_list.append(item)
+                elif isinstance(item, (list, tuple)):
+                    # 如果是嵌套的列表/元组，转换为列表
+                    serialized_list.append(list(item) if isinstance(item, tuple) else item)
+                elif hasattr(item, 'id'):
+                    # 如果是节点对象，只保存 ID
+                    serialized_list.append(item.id)
+                else:
+                    # 尝试转换为字符串
+                    try:
+                        serialized_list.append(str(item))
+                    except:
+                        pass
+            userdata[key] = serialized_list
+        elif hasattr(value, 'id'):
+            # 如果是节点对象（如 proved_by），只保存其 ID
+            userdata[key] = value.id
+        else:
+            # 尝试转换为字符串
+            try:
+                userdata[key] = str(value)
+            except:
+                pass
+    
+    node_data['userdata'] = userdata
+    return node_data
+
+
+def serialize_graph(graph):
+    """
+    序列化依赖图对象，包括所有节点和边。
+    
+    Args:
+        graph: DepGraph 实例
+        
+    Returns:
+        dict: 包含节点列表、边列表和证明边列表的字典
+    """
+    # 序列化所有节点
+    nodes = [serialize_node(node) for node in graph.nodes]
+    
+    # 序列化边（使用节点 ID）
+    edges = [(s.id, t.id) for s, t in graph.edges]
+    
+    # 序列化证明边（使用节点 ID）
+    proof_edges = [(s.id, t.id) for s, t in graph.proof_edges]
+    
+    return {
+        'nodes': nodes,
+        'edges': edges,
+        'proof_edges': proof_edges,
+        'node_count': len(nodes),
+        'edge_count': len(edges),
+        'proof_edge_count': len(proof_edges)
+    }
+
+
+def export_to_json(document, output_path: Path = None):
+    """
+    将 document.userdata 中的蓝图数据导出为 JSON 文件。
+    
+    包括：
+    - 项目元数据（project_home, project_github, project_dochome）
+    - 所有 Lean 声明列表
+    - 依赖图数据（包括所有节点和边）
+    - 颜色配置和图例
+    
+    Args:
+        document: plasTeX 文档对象
+        output_path: 输出 JSON 文件路径，如果为 None 则使用默认路径
+        
+    Returns:
+        Path: 输出文件的路径
+    """
+    if output_path is None:
+        # 默认输出到工作目录的父目录
+        output_path = Path(document.userdata.get('working-dir', '.')).parent / 'blueprint_data.json'
+    
+    # 构建可序列化的数据结构
+    data = {
+        'project_metadata': {
+            'project_home': document.userdata.get('project_home'),
+            'project_github': document.userdata.get('project_github'),
+            'project_dochome': document.userdata.get('project_dochome'),
+        },
+        'lean_decls': document.userdata.get('lean_decls', []),
+    }
+    
+    # 序列化依赖图数据
+    if 'dep_graph' in document.userdata:
+        dep_graph_data = document.userdata['dep_graph']
+        
+        # 序列化颜色配置
+        colors = {}
+        if 'colors' in dep_graph_data:
+            for key, value in dep_graph_data['colors'].items():
+                if isinstance(value, (list, tuple)) and len(value) == 2:
+                    colors[key] = {
+                        'color': value[0],
+                        'description': value[1]
+                    }
+                else:
+                    colors[key] = value
+        
+        # 序列化图例
+        legend = []
+        if 'legend' in dep_graph_data:
+            for item in dep_graph_data['legend']:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    legend.append({
+                        'label': item[0],
+                        'description': item[1]
+                    })
+                else:
+                    legend.append(item)
+        
+        data['dep_graph'] = {
+            'colors': colors,
+            'legend': legend,
+            'graphs': {}
+        }
+        
+        # 序列化每个图
+        if 'graphs' in dep_graph_data:
+            for sec_name, graph in dep_graph_data['graphs'].items():
+                data['dep_graph']['graphs'][sec_name] = serialize_graph(graph)
+    
+    # 写入 JSON 文件
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        log.info(f'Exported blueprint data to {output_path}')
+        return output_path
+    except Exception as e:
+        log.warning(f'Error exporting blueprint data to JSON: {e}')
+        raise
 
 
 def ProcessOptions(options, document):
@@ -448,3 +622,17 @@ def ProcessOptions(options, document):
     if os.environ.get('LEANBLUEPRINT_SUBGRAPH') == '1':
         cb = PackagePreCleanupCB(data=make_subgraph_html)
         document.addPackageResource(cb)
+    
+    # Export blueprint data to JSON file
+    def export_json_callback() -> None:
+        """
+        导出蓝图数据为 JSON 的回调函数。
+        在所有数据处理完成后执行，确保所有数据都已准备好。
+        """
+        try:
+            export_to_json(document)
+        except Exception as e:
+            log.warning(f'Failed to export blueprint data to JSON: {e}')
+    
+    # 在 make_lean_data 之后执行（优先级 200，确保所有数据都已处理）
+    document.addPostParseCallbacks(200, export_json_callback)
