@@ -174,6 +174,40 @@ SUBGRAPH_LINK_TPL = Template("""
 """)
 
 
+def safe_serialize_value(value):
+    """
+    安全地将值转换为可 JSON 序列化的格式。
+    
+    Args:
+        value: 要序列化的值
+        
+    Returns:
+        可序列化的值（字符串、数字、布尔值、None、列表或字典）
+    """
+    if value is None:
+        return None
+    elif isinstance(value, (str, int, float, bool)):
+        return value
+    elif isinstance(value, (list, tuple)):
+        return [safe_serialize_value(item) for item in value]
+    elif isinstance(value, dict):
+        return {k: safe_serialize_value(v) for k, v in value.items()}
+    elif hasattr(value, 'textContent'):
+        # plasTeX URL 对象等，提取 textContent
+        return str(value.textContent) if value.textContent else None
+    elif hasattr(value, 'id'):
+        # 节点对象等，提取 ID
+        return value.id
+    elif hasattr(value, '__str__'):
+        # 其他对象，尝试转换为字符串
+        try:
+            return str(value)
+        except:
+            return None
+    else:
+        return None
+
+
 def serialize_node(node):
     """
     序列化单个节点对象，提取所有相关信息。
@@ -201,37 +235,23 @@ def serialize_node(node):
     userdata = {}
     for key in node.userdata.keys():
         value = node.userdata.get(key)
-        # 跳过无法序列化的对象（如函数、其他节点对象等）
-        if isinstance(value, (str, int, float, bool, type(None))):
-            userdata[key] = value
-        elif isinstance(value, (list, tuple)):
-            # 处理列表/元组，递归处理其中的元素
+        
+        # 特殊处理 lean_urls（元组列表）
+        if key == 'lean_urls' and isinstance(value, (list, tuple)):
             serialized_list = []
             for item in value:
-                if isinstance(item, (str, int, float, bool, type(None))):
-                    serialized_list.append(item)
-                elif isinstance(item, (list, tuple)):
-                    # 如果是嵌套的列表/元组，转换为列表
-                    serialized_list.append(list(item) if isinstance(item, tuple) else item)
-                elif hasattr(item, 'id'):
-                    # 如果是节点对象，只保存 ID
-                    serialized_list.append(item.id)
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    # lean_urls 是 (decl_name, url) 的元组列表
+                    serialized_list.append([
+                        safe_serialize_value(item[0]),
+                        safe_serialize_value(item[1])
+                    ])
                 else:
-                    # 尝试转换为字符串
-                    try:
-                        serialized_list.append(str(item))
-                    except:
-                        pass
+                    serialized_list.append(safe_serialize_value(item))
             userdata[key] = serialized_list
-        elif hasattr(value, 'id'):
-            # 如果是节点对象（如 proved_by），只保存其 ID
-            userdata[key] = value.id
         else:
-            # 尝试转换为字符串
-            try:
-                userdata[key] = str(value)
-            except:
-                pass
+            # 使用安全序列化函数处理其他值
+            userdata[key] = safe_serialize_value(value)
     
     node_data['userdata'] = userdata
     return node_data
@@ -287,14 +307,14 @@ def export_to_json(document, output_path: Path = None):
         # 默认输出到工作目录的父目录
         output_path = Path(document.userdata.get('working-dir', '.')).parent / 'blueprint_data.json'
     
-    # 构建可序列化的数据结构
+    # 构建可序列化的数据结构，使用安全序列化函数
     data = {
         'project_metadata': {
-            'project_home': document.userdata.get('project_home'),
-            'project_github': document.userdata.get('project_github'),
-            'project_dochome': document.userdata.get('project_dochome'),
+            'project_home': safe_serialize_value(document.userdata.get('project_home')),
+            'project_github': safe_serialize_value(document.userdata.get('project_github')),
+            'project_dochome': safe_serialize_value(document.userdata.get('project_dochome')),
         },
-        'lean_decls': document.userdata.get('lean_decls', []),
+        'lean_decls': safe_serialize_value(document.userdata.get('lean_decls', [])),
     }
     
     # 序列化依赖图数据
@@ -307,11 +327,11 @@ def export_to_json(document, output_path: Path = None):
             for key, value in dep_graph_data['colors'].items():
                 if isinstance(value, (list, tuple)) and len(value) == 2:
                     colors[key] = {
-                        'color': value[0],
-                        'description': value[1]
+                        'color': safe_serialize_value(value[0]),
+                        'description': safe_serialize_value(value[1])
                     }
                 else:
-                    colors[key] = value
+                    colors[key] = safe_serialize_value(value)
         
         # 序列化图例
         legend = []
@@ -319,11 +339,11 @@ def export_to_json(document, output_path: Path = None):
             for item in dep_graph_data['legend']:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
                     legend.append({
-                        'label': item[0],
-                        'description': item[1]
+                        'label': safe_serialize_value(item[0]),
+                        'description': safe_serialize_value(item[1])
                     })
                 else:
-                    legend.append(item)
+                    legend.append(safe_serialize_value(item))
         
         data['dep_graph'] = {
             'colors': colors,
@@ -338,10 +358,18 @@ def export_to_json(document, output_path: Path = None):
     
     # 写入 JSON 文件
     try:
+        # 确保输出目录存在
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         log.info(f'Exported blueprint data to {output_path}')
         return output_path
+    except (TypeError, ValueError) as e:
+        # JSON 序列化错误，记录详细信息
+        log.error(f'JSON serialization error: {e}')
+        log.debug(f'Data structure: {data}')
+        raise
     except Exception as e:
         log.warning(f'Error exporting blueprint data to JSON: {e}')
         raise
