@@ -368,15 +368,11 @@ def ProcessOptions(options, document):
         try:
             # Check if dependency graphs exist
             if 'dep_graph' not in document.userdata:
-                log.warning('No dependency graph data found, skipping subgraph generation')
                 return []
             
             graphs = document.userdata['dep_graph'].get('graphs', {})
             if not graphs:
-                log.info('No dependency graphs found, skipping subgraph generation')
                 return []
-            
-            log.info(f'Found {len(graphs)} dependency graph(s), generating subgraphs...')
             
             # Find template using the same method as depgraph package
             from plastexdepgraph.Packages.depgraph import PKG_DIR as DEPGRAPH_PKG_DIR
@@ -393,21 +389,16 @@ def ProcessOptions(options, document):
                     pass
             
             if not default_tpl_path.exists():
-                log.warning(f'SubGraph template not found at {default_tpl_path}, skipping subgraph generation')
                 return []
             
-            log.info(f'Using template: {default_tpl_path}')
             graph_tpl = Template(default_tpl_path.read_text())
             
             # Get options from document userdata (set by depgraph package)
             reduce_graph = not document.userdata.get('dep_graph', {}).get('nonreducedgraph', False)
-            title = document.userdata.get('dep_graph', {}).get('title', 'Dependencies')
             
             files = []
             total_nodes = 0
             for sec, graph in graphs.items():
-                log.info(f'Processing graph for section: {sec if sec != document else "document"}')
-                log.info(f'  Graph has {len(graph.nodes)} nodes')
                 total_nodes += len(graph.nodes)
                 
                 for node in graph.nodes:
@@ -442,15 +433,11 @@ def ProcessOptions(options, document):
                         ).dump(graph_target)
             
             if files:
-                log.info(f'Generated {len(files)} subgraph HTML files from {total_nodes} total nodes')
-            else:
-                log.info(f'No subgraphs generated (nodes may have no dependencies)')
+                log.info(f'Generated {len(files)} subgraph HTML files from {len(graphs)} graph(s) with {total_nodes} total nodes')
             return files
         
         except Exception as e:
-            import traceback
-            log.error(f'Error generating subgraphs: {e}')
-            log.debug(traceback.format_exc())
+            log.warning(f'Error generating subgraphs: {e}')
             return []
     
     # Register callback to generate subgraphs after main graphs are created
