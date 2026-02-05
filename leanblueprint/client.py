@@ -511,12 +511,14 @@ def checkdecls() -> None:
 
 
 @cli.command()
-def all() -> None:
+@click.option('--subgraph', is_flag=True, default=False,
+              help='Generate subgraph HTML files for each node showing its dependencies.')
+def all(subgraph: bool) -> None:
     """
     Compile both the pdf and html versions of the blueprint and check declarations.
     """
     mk_pdf()
-    mk_web()
+    mk_web(subgraph=subgraph)
     subprocess.run("lake build",
                    cwd=str(blueprint_root.parent), check=True, shell=True)
     do_checkdecls()
