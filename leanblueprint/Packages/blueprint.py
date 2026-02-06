@@ -403,7 +403,7 @@ def ProcessOptions(options, document):
                 
                 for node in graph.nodes:
                     sub = graph.subgraph(node)  # Use the monkey-patched method
-                    if sub and len(sub.nodes) > 1:  # Only generate if there are dependencies
+                    if sub:  # Generate even for isolated nodes (no dependencies)
                         # Create a safe filename from node ID
                         node_id_safe = node.id.replace(':', '_').replace('/', '_')
                         graph_target = f'subgraph_{node_id_safe}.html'
