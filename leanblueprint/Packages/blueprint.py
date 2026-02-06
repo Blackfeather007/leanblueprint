@@ -176,35 +176,23 @@ SUBGRAPH_LINK_TPL = Template("""
 def ProcessOptions(options, document):
     """This is called when the package is loaded."""
 
-    # Extend DepGraph class with subgraph method using monkey patching
     def subgraph(self, node):
-        """
-        Create a subgraph containing the given node and all its ancestors (dependencies).
-        Returns a new DepGraph instance, or None if node is not in the graph.
-        """
+        """Return a subgraph containing the node and all its ancestors."""
         if node not in self.nodes:
             return None
-        
-        # Get all ancestor nodes (dependencies)
         ancestor_nodes = self.ancestors(node)
         subgraph_nodes = ancestor_nodes.union({node})
-        
-        # Create new DepGraph instance
         sub = DepGraph()
         sub.document = self.document
         sub.nodes = subgraph_nodes
-        
-        # Only include edges within the subgraph
         for s, t in self.edges:
             if s in subgraph_nodes and t in subgraph_nodes:
                 sub.edges.add((s, t))
         for s, t in self.proof_edges:
             if s in subgraph_nodes and t in subgraph_nodes:
                 sub.proof_edges.add((s, t))
-        
         return sub
-    
-    # Monkey patch: dynamically add method to DepGraph class
+
     DepGraph.subgraph = subgraph
 
     # We want to ensure the depgraph and showmore packages are loaded.
@@ -359,68 +347,47 @@ def ProcessOptions(options, document):
     document.userdata['dep_graph'].setdefault('extra_modal_links_tpl', []).extend([
         LEAN_LINKS_TPL, GITHUB_LINK_TPL, SUBGRAPH_LINK_TPL])
 
-    # Generate subgraph HTML files for each node
     def make_subgraph_html(document):
-        """
-        Generate subgraph HTML files for each node in the dependency graphs.
-        Each subgraph shows the node and all its dependencies.
-        """
+        """Generate subgraph HTML files for each node in the dependency graphs."""
         try:
-            # Check if dependency graphs exist
             if 'dep_graph' not in document.userdata:
                 return []
-            
             graphs = document.userdata['dep_graph'].get('graphs', {})
             if not graphs:
                 return []
-            
-            # Find template using the same method as depgraph package
+
             from plastexdepgraph.Packages.depgraph import PKG_DIR as DEPGRAPH_PKG_DIR
             default_tpl_path = DEPGRAPH_PKG_DIR.parent / 'templates' / 'dep_graph.html'
-            
-            # If not found, try alternative locations
             if not default_tpl_path.exists():
-                # Try to find in installed package location
                 try:
                     import plastexdepgraph
                     depgraph_pkg_dir = Path(plastexdepgraph.__file__).parent
                     default_tpl_path = depgraph_pkg_dir.parent / 'templates' / 'dep_graph.html'
                 except (ImportError, AttributeError):
                     pass
-            
             if not default_tpl_path.exists():
                 return []
-            
+
             graph_tpl = Template(default_tpl_path.read_text())
-            
-            # Get options from document userdata (set by depgraph package)
             reduce_graph = not document.userdata.get('dep_graph', {}).get('nonreducedgraph', False)
-            
+
             files = []
             total_nodes = 0
             for sec, graph in graphs.items():
                 total_nodes += len(graph.nodes)
-                
                 for node in graph.nodes:
-                    sub = graph.subgraph(node)  # Use the monkey-patched method
-                    if sub:  # Generate even for isolated nodes (no dependencies)
-                        # Create a safe filename from node ID
+                    sub = graph.subgraph(node)
+                    if sub:
                         node_id_safe = node.id.replace(':', '_').replace('/', '_')
                         graph_target = f'subgraph_{node_id_safe}.html'
                         files.append(graph_target)
-                        
-                        # Generate DOT representation
                         dot = sub.to_dot(document.userdata['dep_graph'].get('shapes', {'definition': 'box'}))
                         if reduce_graph:
                             dot = dot.tred()
-                        
-                        # Generate subgraph title
                         node_title = node.id.split(':')[-1]
                         if hasattr(node, 'caption') and node.caption:
                             node_title = str(node.caption)
                         subgraph_title = f'Dependencies of {node_title}'
-                        
-                        # Render HTML
                         graph_tpl.stream(
                             graph=sub,
                             dot=dot.to_string(),
@@ -431,19 +398,15 @@ def ProcessOptions(options, document):
                             document=document,
                             config=document.config
                         ).dump(graph_target)
-            
+
             if files:
-                log.info(f'Generated {len(files)} subgraph HTML files from {len(graphs)} graph(s) with {total_nodes} total nodes')
+                log.info(f'Generated {len(files)} subgraph HTML files')
             return files
-        
         except Exception as e:
             log.warning(f'Error generating subgraphs: {e}')
             return []
-    
-    # Register callback to generate subgraphs after main graphs are created
-    # Only if subgraph option is enabled (via environment variable)
-    # Use a higher priority (lower number) than the main graph generation (110)
-    # but after make_lean_data (150) to ensure all node data is ready
+
+    ## Subgraph generation
     import os
     if os.environ.get('LEANBLUEPRINT_SUBGRAPH') == '1':
         cb = PackagePreCleanupCB(data=make_subgraph_html)
